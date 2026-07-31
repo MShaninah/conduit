@@ -10,6 +10,8 @@ from .views import (
 router = DefaultRouter(trailing_slash=False)
 router.register(r'articles', ArticleViewSet)
 
+app_name = 'articles'
+
 urlpatterns = [
     url(r'^', include(router.urls)),
 

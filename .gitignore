@@ -1,0 +1,30 @@
+# Environment files with secrets
+.env
+.env.*
+!.env.example
+
+# Backend (Python / Django)
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+backend/db.sqlite3
+backend/staticfiles/
+
+# Frontend (Node / Angular)
+node_modules/
+dist/
+frontend/.angular/
+npm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Logs
+*.log
+meine-container-logs.txt
