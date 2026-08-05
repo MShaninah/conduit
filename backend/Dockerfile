@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 ## ---- Stage 1: build dependencies ----
 FROM python:3.10-slim AS builder
 
@@ -17,9 +15,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 ## ---- Stage 2: runtime image ----
 FROM python:3.10-slim AS runtime
 
-# Non-critical defaults configured directly in the image; SECRET_KEY and
-# DATABASE_URL are intentionally NOT defaulted here - they must be injected
-# at runtime (see docker-compose.yaml / .env).
 ENV BACKEND_PORT=5000 \
     GUNICORN_WORKERS=3 \
     DEBUG=false \
