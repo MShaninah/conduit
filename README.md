@@ -6,13 +6,13 @@ containerization exercise for Developer Akademie. It packages the official
 [`conduit-backend`](https://github.com/Developer-Akademie-DevSecOpsKurs/conduit-backend)
 (Django REST Framework) and
 [`conduit-frontend`](https://github.com/Developer-Akademie-DevSecOpsKurs/conduit-frontend)
-(Angular) reference apps, with their originally-pinned dependencies updated
-to versions that actually install and run today.
+(Angular) reference apps, kept on their original pinned dependencies and
+containerized around them.
 
 ## Table of Contents
 
-- [Description](#description)
 - [Quickstart](#quickstart)
+- [Description](#description)
 - [Usage](#usage)
   - [Repository structure](#repository-structure)
   - [Environment variables](#environment-variables)
@@ -23,40 +23,6 @@ to versions that actually install and run today.
   - [Database and data persistence](#database-and-data-persistence)
   - [Viewing and persisting logs](#viewing-and-persisting-logs)
 - [Security notes](#security-notes)
-
-## Description
-
-This repository contains a complete, self-hosted Conduit application split into
-three containers orchestrated with Docker Compose:
-
-- **`frontend`** — the official Angular SPA, implementing the full Conduit
-  UI: registration/login, global/personal article feeds, tag filtering,
-  article CRUD, favoriting, comments, following, and user profiles/settings.
-  Served in production by Nginx, which also reverse-proxies `/api/*`
-  requests to the backend so the browser only ever talks to one origin.
-- **`backend`** — the official Django REST Framework app implementing the
-  [RealWorld API spec](https://realworld-docs.netlify.app/specifications/backend/endpoints/)
-  (JWT auth, users, profiles, articles, comments, tags), served in production
-  by Gunicorn (a WSGI server — never Django's built-in `runserver`).
-- **`database`** — PostgreSQL, with its data directory persisted in a named
-  Docker volume.
-
-The upstream repos are from 2016 (Django 1.10, DRF 3.4, PyJWT 1.4) and no
-longer install cleanly against a current Python. This repo ports the backend
-forward to current, actively-maintained versions of the same libraries
-(Django 3.2 LTS, DRF 3.14, PyJWT 2.8, `django-cors-headers` replacing the
-abandoned `django-cors-middleware`) with the minimal code changes needed to
-keep it running — not a rewrite. The Angular frontend's dependencies were
-already current and needed no version bump, only pointing it at this
-repo's own backend instead of the public `api.realworld.io` demo API. See
-`archive/from-scratch-flask-vue/` for an earlier, from-scratch
-reimplementation of the same spec that predates switching to these upstream
-repos; it is kept for reference only and is not part of the running stack.
-
-The purpose of this repository is not to demonstrate novel product features,
-but to show a correct, secure, production-shaped containerization of a
-full-stack app: multi-stage Dockerfiles, environment-based configuration,
-crash-resilient services, and a documented developer workflow.
 
 ## Quickstart
 
@@ -86,6 +52,53 @@ crash-resilient services, and a documented developer workflow.
    docker compose down
    ```
    (add `-v` to also delete the database volume and wipe all data)
+
+
+## Description
+
+This repository contains a complete, self-hosted Conduit application split into
+three containers orchestrated with Docker Compose:
+
+- **`frontend`** — the official Angular SPA, implementing the full Conduit
+  UI: registration/login, global/personal article feeds, tag filtering,
+  article CRUD, favoriting, comments, following, and user profiles/settings.
+  Served in production by Nginx, which also reverse-proxies `/api/*`
+  requests to the backend so the browser only ever talks to one origin.
+- **`backend`** — the official Django REST Framework app implementing the
+  [RealWorld API spec](https://realworld-docs.netlify.app/specifications/backend/endpoints/)
+  (JWT auth, users, profiles, articles, comments, tags), served in production
+  by Gunicorn (a WSGI server — never Django's built-in `runserver`).
+- **`database`** — PostgreSQL, with its data directory persisted in a named
+  Docker volume.
+
+The upstream repos are from 2016 (Django 1.10, DRF 3.4, PyJWT 1.4) and no
+longer install against a current Python. Part of the point of this exercise is
+learning to deal with deprecated dependencies rather than upgrading past them,
+so `backend/requirements.txt` keeps the original pins untouched and the
+container is built to suit them: the backend image is based on
+`python:3.5-slim`, the newest interpreter Django 1.10 supports. Only two
+dependencies are added — `psycopg2-binary` and `gunicorn` — because running
+against Postgres behind a real WSGI server is a containerization requirement,
+not an upstream one; both are pinned to their last Python 3.5-compatible
+releases.
+
+Because Debian buster (the base of `python:3.5-slim`) is end-of-life, its
+packages are pulled from `archive.debian.org` — see the comment in
+`backend/Dockerfile`. Treat this image as a teaching artifact: it is built
+from an unsupported interpreter and an unsupported base OS, and it is not
+something to expose to real traffic.
+
+The Angular frontend's dependencies were already current and needed no version
+bump, only pointing it at this repo's own backend instead of the public
+`api.realworld.io` demo API. See
+`archive/from-scratch-flask-vue/` for an earlier, from-scratch
+reimplementation of the same spec that predates switching to these upstream
+repos; it is kept for reference only and is not part of the running stack.
+
+The purpose of this repository is not to demonstrate novel product features,
+but to show a correct, secure, production-shaped containerization of a
+full-stack app: multi-stage Dockerfiles, environment-based configuration,
+crash-resilient services, and a documented developer workflow.
 
 ## Usage
 
@@ -119,8 +132,11 @@ All variables use `UPPER_CASE_WITH_UNDERSCORE` and are referenced with
 `${...}` brace notation throughout the Dockerfiles and `docker-compose.yaml`.
 
 Critical values (credentials/secrets) are **never** hardcoded or committed.
-They live only in your local `.env` file (gitignored) and are injected into
-containers at runtime by Compose:
+They live only in your local `.env` file (gitignored). The `database` and
+`backend` services load it wholesale with `env_file: .env`; the `frontend`
+service deliberately does not, so the public-facing container never receives
+`SECRET_KEY` or the database password — it gets only the two non-secret
+values it needs:
 
 | Variable            | Used by  | Critical? | Description                                   |
 | -------------------- | -------- | --------- | ---------------------------------------------- |
@@ -143,6 +159,17 @@ different:
 | `CORS_ORIGINS`             | `*`      | Allowed CORS origins for the API                |
 | `FRONTEND_INTERNAL_PORT`   | `80`     | Port Nginx listens on inside the frontend container |
 
+Anything left commented out in `.env` is simply not passed into the container,
+so the default baked into the corresponding Dockerfile applies. The one place
+`.env` values still have to be interpolated with `${...}` rather than supplied
+through `env_file` is the `ports:` mappings: Compose resolves those while
+parsing the file, before any container exists to read an environment from.
+
+`DB_HOST` (`database`) and `DB_PORT` (`5432`) are set in `docker-compose.yaml`
+rather than `.env`, since they describe the Compose network topology rather
+than anything a user configures. The backend uses them both to build its
+Django `DATABASES` setting and to poll the database from `entrypoint.sh`.
+
 The frontend is always published on **host port 8282** (mapped to
 `FRONTEND_INTERNAL_PORT` inside the container), independent of the internal
 port configuration.
@@ -152,11 +179,12 @@ port configuration.
 Both Dockerfiles use **multi-stage builds** to keep final images small and
 free of build tooling:
 
-- **`backend/Dockerfile`**: stage 1 (`builder`, `python:3.10-slim`) installs
+- **`backend/Dockerfile`**: stage 1 (`builder`, `python:3.5-slim`) installs
   Python dependencies into a virtualenv; stage 2 (`runtime`) copies only that
-  virtualenv and the application code into a fresh slim image, runs as a
-  non-root user, and starts via `entrypoint.sh` → Gunicorn (WSGI), never
-  `manage.py runserver`.
+  virtualenv and the application code into a fresh slim image, adds
+  `postgresql-client` for `pg_isready`, runs as a non-root user, and starts
+  via `entrypoint.sh` → Gunicorn (WSGI), never `manage.py runserver`. The
+  Python 3.5 base is dictated by the unchanged Django 1.10 pin.
 - **`frontend/Dockerfile`**: stage 1 (`build`, `node:20-alpine`) runs
   `npm install && npm run build` to produce a static Angular production
   bundle; stage 2 (`runtime`, `nginx:1.27-alpine`) copies only the built
@@ -173,6 +201,10 @@ free of build tooling:
 - `backend` waits for `database` to report healthy (via a `pg_isready`
   healthcheck) before starting; `frontend` waits for `backend` to report
   healthy (via a request to `/api/tags`) before starting.
+- `backend/entrypoint.sh` additionally polls the database with `pg_isready`
+  in a loop before running migrations, so the backend still starts correctly
+  if it is launched without Compose's health gating, or if the database
+  restarts underneath it.
 - The frontend's Nginx config resolves the backend hostname **per-request**
   via Docker's embedded DNS resolver, rather than once at startup — this
   means Nginx won't crash if it starts slightly before the backend, and it
@@ -189,8 +221,8 @@ The Django app lives in `backend/conduit/`:
 - `apps/core/` — shared response rendering (`renderers.py`, wraps every
   response in the RealWorld envelope) and error handling (`exceptions.py`).
 - `settings.py` — reads all configuration from environment variables;
-  `SECRET_KEY` and `DATABASE_URL` raise at startup if missing (no silent
-  fallback for secrets).
+  `SECRET_KEY` and the `POSTGRES_*` credentials raise at startup if missing
+  (no silent fallback for secrets).
 
 Database schema changes go through Django's migration system
 (`python manage.py makemigrations` / `migrate`) — `entrypoint.sh` runs
@@ -259,5 +291,5 @@ docker logs conduit-container-backend-1 > meine-container-logs.txt
   repository.
 - `.env` (holding `POSTGRES_PASSWORD` and `SECRET_KEY`) is gitignored; only
   `.env.example`, with placeholder values, is committed.
-- `docker-compose.yaml` never hardcodes credentials — it references `${...}`
-  variables that Compose resolves from your local `.env` at runtime.
+- `docker-compose.yaml` never hardcodes credentials — it loads them from your
+  local `.env` via `env_file`, and only for the services that need them.

@@ -2,14 +2,11 @@ services:
   database:
     image: postgres:16-alpine
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+    env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -21,25 +18,17 @@ services:
     depends_on:
       database:
         condition: service_healthy
+    env_file: .env
     environment:
-      # Critical - injected from .env.
-      SECRET_KEY: ${SECRET_KEY}
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@database:5432/${POSTGRES_DB}
-      # Non-critical, overridable via .env.
-      BACKEND_PORT: ${BACKEND_PORT:-5000}
-      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
-      DEBUG: ${DEBUG:-false}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      DB_HOST: database
+      DB_PORT: 5432
     ports:
       - "${BACKEND_HOST_PORT:-5000}:${BACKEND_PORT:-5000}"
     healthcheck:
       test:
         [
-          "CMD",
-          "python",
-          "-c",
-          "import os,urllib.request; urllib.request.urlopen(f\"http://localhost:{os.environ.get('BACKEND_PORT','5000')}/api/tags\", timeout=3)",
+          "CMD-SHELL",
+          "python -c \"import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('BACKEND_PORT', '5000') + '/api/tags', timeout=3)\"",
         ]
       interval: 10s
       timeout: 5s

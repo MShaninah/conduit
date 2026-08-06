@@ -11,7 +11,6 @@ https://docs.djangoproject.com/en/1.10/ref/settings/
 """
 
 import os
-from urllib.parse import urlparse
 
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -94,16 +93,14 @@ WSGI_APPLICATION = 'conduit.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/1.10/ref/settings/#databases
 
-_db_url = urlparse(os.environ['DATABASE_URL'])
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': _db_url.path.lstrip('/'),
-        'USER': _db_url.username,
-        'PASSWORD': _db_url.password,
-        'HOST': _db_url.hostname,
-        'PORT': _db_url.port or 5432,
+        'NAME': os.environ['POSTGRES_DB'],
+        'USER': os.environ['POSTGRES_USER'],
+        'PASSWORD': os.environ['POSTGRES_PASSWORD'],
+        'HOST': os.environ.get('DB_HOST', 'database'),
+        'PORT': int(os.environ.get('DB_PORT', 5432)),
     }
 }
 
@@ -150,9 +147,9 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 _cors_origins = os.environ.get('CORS_ORIGINS', '*')
 
 if _cors_origins.strip() == '*':
-    CORS_ALLOW_ALL_ORIGINS = True
+    CORS_ORIGIN_ALLOW_ALL = True
 else:
-    CORS_ALLOWED_ORIGINS = [
+    CORS_ORIGIN_WHITELIST = [
         origin.strip() for origin in _cors_origins.split(',') if origin.strip()
     ]
 
