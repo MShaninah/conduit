@@ -12,6 +12,7 @@ services:
       retries: 10
 
   backend:
+    image: conduit-backend
     build:
       context: ./backend
     restart: unless-stopped
@@ -28,13 +29,14 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python -c \"import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('BACKEND_PORT', '5000') + '/api/tags', timeout=3)\"",
+          "curl --fail --silent http://localhost:$${BACKEND_PORT:-5000}/api/tags > /dev/null",
         ]
       interval: 10s
       timeout: 5s
       retries: 10
 
   frontend:
+    image: conduit-frontend
     build:
       context: ./frontend
     restart: unless-stopped

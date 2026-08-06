@@ -29,7 +29,7 @@ RUN printf 'deb http://archive.debian.org/debian buster main\n\
 deb http://archive.debian.org/debian-security buster/updates main\n' \
         > /etc/apt/sources.list \
     && apt-get -o Acquire::Check-Valid-Until=false update \
-    && apt-get install --no-install-recommends -y postgresql-client \
+    && apt-get install --no-install-recommends -y postgresql-client curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --system conduit && useradd --system --gid conduit --create-home conduit
