@@ -16,7 +16,15 @@
       rel="stylesheet"
       type="text/css"
     />
-    <link rel="stylesheet" href="//demo.productionready.io/main.css" />
+    <!--
+      Upstream (gothinkster/conduit-frontend) links this from
+      //demo.productionready.io/main.css, but that CDN has been fully
+      decommissioned (returns 404 site-wide, not just for this file) - so it's
+      vendored locally instead. Rebuilt from the actual theme source,
+      gothinkster/conduit-bootstrap-template (Bootstrap 4 alpha SCSS + Conduit
+      overrides), compiled with dart-sass; see frontend/src/assets/conduit-theme.css.
+    -->
+    <link rel="stylesheet" href="assets/conduit-theme.css" />
   </head>
   <body>
     <app-root></app-root>

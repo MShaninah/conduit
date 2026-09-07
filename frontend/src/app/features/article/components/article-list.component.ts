@@ -14,6 +14,12 @@ import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
       <div class="article-preview">Loading articles...</div>
     }
 
+    @if (loading === LoadingState.ERROR) {
+      <div class="article-preview">
+        Unable to load articles right now. Please try again later.
+      </div>
+    }
+
     @if (loading === LoadingState.LOADED) {
       @for (article of results; track article.slug) {
         <app-article-preview [article]="article" />
@@ -84,15 +90,21 @@ export class ArticleListComponent {
     this.articlesService
       .query(this.query)
       .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe((data) => {
-        this.loading = LoadingState.LOADED;
-        this.results = data.articles;
+      .subscribe({
+        next: (data) => {
+          this.loading = LoadingState.LOADED;
+          this.results = data.articles;
 
-        // Used from http://www.jstips.co/en/create-range-0...n-easily-using-one-line/
-        this.totalPages = Array.from(
-          new Array(Math.ceil(data.articlesCount / this.limit)),
-          (val, index) => index + 1,
-        );
+          // Used from http://www.jstips.co/en/create-range-0...n-easily-using-one-line/
+          this.totalPages = Array.from(
+            new Array(Math.ceil(data.articlesCount / this.limit)),
+            (val, index) => index + 1,
+          );
+        },
+        error: (err) => {
+          console.error("Failed to load articles", err);
+          this.loading = LoadingState.ERROR;
+        },
       });
   }
 }

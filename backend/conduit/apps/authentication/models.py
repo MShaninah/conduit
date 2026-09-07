@@ -143,4 +143,8 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampedModel):
             'exp': int(dt.strftime('%s'))
         }, settings.SECRET_KEY, algorithm='HS256')
 
-        return token.decode('utf-8')
+        # PyJWT >= 2 returns `str` from encode(); older PyJWT returned `bytes`.
+        if isinstance(token, bytes):
+            token = token.decode('utf-8')
+
+        return token

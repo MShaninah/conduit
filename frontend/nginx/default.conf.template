@@ -1,0 +1,31 @@
+server {
+    listen ${FRONTEND_INTERNAL_PORT};
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Resolve the backend hostname per-request via Docker's embedded DNS
+    # (127.0.0.11) instead of once at startup, so Nginx doesn't crash if the
+    # backend container isn't resolvable yet and picks up its address again
+    # if the backend container is later recreated.
+    resolver 127.0.0.11 valid=10s;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        # No path after the variable: with a variable target, Nginx does not
+        # strip the location-matched prefix, so appending "/api/" here would
+        # double up to "/api/api/...". Passing the bare host:port forwards
+        # the original request URI (already "/api/...") unchanged.
+        set $backend_upstream "http://${BACKEND_HOST}:${BACKEND_PORT}";
+        proxy_pass $backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

@@ -10,19 +10,24 @@ from .views import (
 router = DefaultRouter(trailing_slash=False)
 router.register(r'articles', ArticleViewSet)
 
-urlpatterns = [
-    url(r'^', include(router.urls)),
+app_name = 'articles'
 
+urlpatterns = [
     url(r'^articles/feed/?$', ArticlesFeedAPIView.as_view()),
 
     url(r'^articles/(?P<article_slug>[-\w]+)/favorite/?$',
         ArticlesFavoriteAPIView.as_view()),
 
-    url(r'^articles/(?P<article_slug>[-\w]+)/comments/?$', 
+    url(r'^articles/(?P<article_slug>[-\w]+)/comments/?$',
         CommentsListCreateAPIView.as_view()),
 
     url(r'^articles/(?P<article_slug>[-\w]+)/comments/(?P<comment_pk>[\d]+)/?$',
         CommentsDestroyAPIView.as_view()),
 
     url(r'^tags/?$', TagListAPIView.as_view()),
+
+    # Must come last: the router's detail route (`articles/<slug>`) would
+    # otherwise shadow the more specific literal routes above (e.g. matching
+    # "feed" in /articles/feed as a slug lookup instead of the feed view).
+    url(r'^', include(router.urls)),
 ]
