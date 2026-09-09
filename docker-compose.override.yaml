@@ -1,0 +1,18 @@
+# Local development overrides.
+#
+# `docker compose` merges this file into docker-compose.yaml automatically when
+# it is present in the working directory. It is intentionally NOT copied to the
+# cloud VM by the deployment workflow, so the VM only ever pulls prebuilt images
+# while a local `docker compose up --build` still builds from source.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    # Direct access to the API while developing, without going through Nginx.
+    ports:
+      - "${BACKEND_HOST_PORT:-5000}:${BACKEND_PORT:-5000}"
+
+  frontend:
+    build:
+      context: ./frontend

@@ -1,0 +1,171 @@
+name: Deployment
+
+# Builds the backend and frontend images on GitHub's runners, pushes them to the
+# GitHub Container Registry and then deploys them to the cloud VM over SSH.
+# The VM only pulls and starts prebuilt images - it never builds anything.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  IMAGE_REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    name: Build and push the ${{ matrix.service }} image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        service: [backend, frontend]
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Resolve the image name
+        id: image
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          # Container registries only accept lowercase repository names.
+          IMAGE_NAME="${IMAGE_REGISTRY}/${REPOSITORY_OWNER,,}/conduit-${SERVICE}"
+          echo "IMAGE_NAME=${IMAGE_NAME}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          tags: |
+            ${{ steps.image.outputs.IMAGE_NAME }}:${{ github.sha }}
+            ${{ steps.image.outputs.IMAGE_NAME }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to the cloud VM
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Resolve the image registry namespace
+        id: registry
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY}/${REPOSITORY_OWNER,,}" >> "${GITHUB_OUTPUT}"
+
+      - name: Copy the compose file to the VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: docker-compose.yaml
+          target: ${{ vars.DEPLOY_PATH || '~/conduit' }}
+          overwrite: true
+
+      - name: Start the stack with docker compose
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/conduit' }}
+          IMAGE_REGISTRY: ${{ steps.registry.outputs.IMAGE_REGISTRY }}
+          # Deploy the exact commit that was just built, not a floating tag.
+          IMAGE_TAG: ${{ github.sha }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FRONTEND_HOST_PORT: ${{ vars.FRONTEND_HOST_PORT || 8282 }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          # Abort the remote script - and therefore the workflow - on the first
+          # command that fails.
+          script_stops: true
+          envs: DEPLOY_PATH,IMAGE_REGISTRY,IMAGE_TAG,REGISTRY_USER,REGISTRY_TOKEN,FRONTEND_HOST_PORT,POSTGRES_USER,POSTGRES_PASSWORD,POSTGRES_DB,SECRET_KEY
+          script: |
+            set -eu
+
+            cd "${DEPLOY_PATH}"
+
+            # Rewrite the .env file from the repository secrets on every deploy,
+            # so no credential is ever stored in git or baked into an image.
+            umask 077
+            cat > .env <<ENV_FILE
+            IMAGE_REGISTRY=${IMAGE_REGISTRY}
+            IMAGE_TAG=${IMAGE_TAG}
+            FRONTEND_HOST_PORT=${FRONTEND_HOST_PORT}
+            POSTGRES_USER=${POSTGRES_USER}
+            POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+            POSTGRES_DB=${POSTGRES_DB}
+            SECRET_KEY=${SECRET_KEY}
+            ENV_FILE
+
+            echo "${REGISTRY_TOKEN}" \
+              | docker login "${IMAGE_REGISTRY%%/*}" --username "${REGISTRY_USER}" --password-stdin
+
+            docker compose pull
+            # Detached mode; --wait blocks until every container is healthy and
+            # exits non-zero if one of them is not.
+            docker compose up --detach --wait --wait-timeout 300 --remove-orphans
+
+            docker logout "${IMAGE_REGISTRY%%/*}"
+            docker image prune --force
+
+      - name: Verify that the application answers
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/conduit' }}
+          FRONTEND_HOST_PORT: ${{ vars.FRONTEND_HOST_PORT || 8282 }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script_stops: true
+          envs: DEPLOY_PATH,FRONTEND_HOST_PORT
+          script: |
+            set -eu
+
+            cd "${DEPLOY_PATH}"
+            docker compose ps
+
+            # Smoke test: the frontend must serve the app and proxy the API.
+            curl --fail --silent --show-error --max-time 10 \
+              "http://localhost:${FRONTEND_HOST_PORT}/" > /dev/null
+            curl --fail --silent --show-error --max-time 10 \
+              "http://localhost:${FRONTEND_HOST_PORT}/api/tags" > /dev/null
+
+            echo "Deployment verified on port ${FRONTEND_HOST_PORT}."

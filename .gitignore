@@ -27,4 +27,12 @@ npm-debug.log*
 
 # Logs
 *.log
+*-logs.txt
 meine-container-logs.txt
+
+# Credentials - SSH keys belong in GitHub Actions secrets, never in the repo
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.ssh/

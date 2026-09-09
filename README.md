@@ -22,6 +22,12 @@ containerized around them.
   - [Changing the frontend](#changing-the-frontend)
   - [Database and data persistence](#database-and-data-persistence)
   - [Viewing and persisting logs](#viewing-and-persisting-logs)
+- [Deployment](#deployment)
+  - [How the pipeline works](#how-the-pipeline-works)
+  - [One-time setup](#one-time-setup)
+  - [Required secrets and variables](#required-secrets-and-variables)
+  - [Running and troubleshooting a deployment](#running-and-troubleshooting-a-deployment)
+  - [Changing the deployment workflow](#changing-the-deployment-workflow)
 - [Security notes](#security-notes)
 
 ## Quickstart
@@ -52,6 +58,11 @@ containerized around them.
    docker compose down
    ```
    (add `-v` to also delete the database volume and wipe all data)
+
+`--build` builds the images locally, which works because
+`docker-compose.override.yaml` is present in a checkout. Without `--build`, the
+images are pulled from the registry instead. To deploy this to a server, see
+[Deployment](#deployment) — deployments are automatic on a push to `main`.
 
 
 ## Description
@@ -90,15 +101,20 @@ something to expose to real traffic.
 
 The Angular frontend's dependencies were already current and needed no version
 bump, only pointing it at this repo's own backend instead of the public
-`api.realworld.io` demo API. See
-`archive/from-scratch-flask-vue/` for an earlier, from-scratch
-reimplementation of the same spec that predates switching to these upstream
-repos; it is kept for reference only and is not part of the running stack.
+`api.realworld.io` demo API.
+
+On top of the containers, the repository carries its own delivery pipeline:
+[`.github/workflows/deployment.yaml`](.github/workflows/deployment.yaml) builds
+both images on GitHub's runners, publishes them to the GitHub Container
+Registry, and deploys them to a cloud VM over SSH with `docker compose` in
+detached mode. The VM only ever pulls prebuilt images — see
+[Deployment](#deployment).
 
 The purpose of this repository is not to demonstrate novel product features,
-but to show a correct, secure, production-shaped containerization of a
-full-stack app: multi-stage Dockerfiles, environment-based configuration,
-crash-resilient services, and a documented developer workflow.
+but to show a correct, secure, production-shaped containerization and
+deployment of a full-stack app: multi-stage Dockerfiles, environment-based
+configuration, crash-resilient services, an automated SSH deployment, and a
+documented developer workflow.
 
 ## Usage
 
@@ -117,11 +133,19 @@ crash-resilient services, and a documented developer workflow.
 │   ├── src/app/                 Core services/interceptors, feature modules
 │   ├── nginx/                    Nginx config template (Nginx image, not a dev server)
 │   └── Dockerfile                Multi-stage build → static bundle served by Nginx
-├── archive/from-scratch-flask-vue/  Superseded Flask+Vue reimplementation (reference only)
-├── docker-compose.yaml        Orchestrates frontend + backend + database
+├── .github/workflows/
+│   └── deployment.yaml         CI/CD: builds + pushes images, deploys over SSH
+├── docker-compose.yaml        Orchestrates frontend + backend + database (registry images)
+├── docker-compose.override.yaml  Local-only: adds the `build:` sections back in
 ├── .env.example                Template for required environment variables
 └── README.md
 ```
+
+`docker-compose.yaml` is the file that is copied to the cloud VM, and it
+references prebuilt registry images only. `docker-compose.override.yaml` is
+merged in automatically by `docker compose` when you work locally, and is the
+only place a `build:` section exists — so the VM can never accidentally build
+an image. See [Deployment](#deployment).
 
 Each service directory has its own `.dockerignore`, since each is built with
 its own Docker build context (`./backend` and `./frontend` respectively).
@@ -152,12 +176,17 @@ different:
 | Variable                 | Default  | Description                                    |
 | ------------------------- | -------- | ----------------------------------------------- |
 | `BACKEND_PORT`             | `5000`   | Port Gunicorn listens on inside the container   |
-| `BACKEND_HOST_PORT`        | `5000`   | Host port mapped to the backend (for direct API access/debugging) |
+| `BACKEND_HOST_PORT`        | `5000`   | Host port mapped to the backend for direct API access while developing. Local only — the deployed stack does not publish this port |
 | `GUNICORN_WORKERS`         | `3`      | Number of Gunicorn worker processes             |
 | `DEBUG`                    | `false`  | Django debug mode — keep `false` outside local dev |
 | `ALLOWED_HOSTS`             | `*`      | Django `ALLOWED_HOSTS`. Defaults to `*` because the backend is only ever reached through the frontend's Nginx proxy, which forwards the original Host header (e.g. a Cloud VM's public IP) unchanged; set a comma-separated allowlist instead if the backend is ever exposed directly |
 | `CORS_ORIGINS`             | `*`      | Allowed CORS origins for the API                |
 | `FRONTEND_INTERNAL_PORT`   | `80`     | Port Nginx listens on inside the frontend container |
+| `FRONTEND_HOST_PORT`       | `8282`   | Host port the app is published on — the checklist requires `8282` |
+| `IMAGE_REGISTRY`           | `ghcr.io/mshaninah` | Registry namespace the `backend`/`frontend` images are pulled from |
+| `IMAGE_TAG`                | `latest` | Image tag to run. The deployment workflow pins this to the deployed commit SHA |
+| `LOG_MAX_SIZE`             | `10m`    | Max size of a single container log file before it is rotated |
+| `LOG_MAX_FILE`             | `5`      | Number of rotated log files kept per container |
 
 Anything left commented out in `.env` is simply not passed into the container,
 so the default baked into the corresponding Dockerfile applies. The one place
@@ -170,9 +199,9 @@ rather than `.env`, since they describe the Compose network topology rather
 than anything a user configures. The backend uses them both to build its
 Django `DATABASES` setting and to poll the database from `entrypoint.sh`.
 
-The frontend is always published on **host port 8282** (mapped to
+The frontend is published on **host port 8282** by default (mapped to
 `FRONTEND_INTERNAL_PORT` inside the container), independent of the internal
-port configuration.
+port configuration. Override `FRONTEND_HOST_PORT` only if 8282 is unavailable.
 
 ### Docker images
 
@@ -190,6 +219,12 @@ free of build tooling:
   bundle; stage 2 (`runtime`, `nginx:1.27-alpine`) copies only the built
   `dist/angular-conduit/` output and serves it with Nginx — no Node.js, no
   dev server, and no source code in the final image.
+
+Images are built once, by CI, and published to the GitHub Container Registry as
+`ghcr.io/<owner>/conduit-backend` and `ghcr.io/<owner>/conduit-frontend`, each
+tagged with both `latest` and the commit SHA it was built from. The cloud VM
+pulls those images; it never builds them. Locally, `docker compose build` (or
+`up --build`) still builds from source thanks to `docker-compose.override.yaml`.
 
 ### docker-compose services
 
@@ -209,6 +244,13 @@ free of build tooling:
   via Docker's embedded DNS resolver, rather than once at startup — this
   means Nginx won't crash if it starts slightly before the backend, and it
   keeps working if the backend container is later recreated with a new IP.
+- Only the `frontend` publishes a port in the deployed stack. The backend is
+  reachable exclusively through Nginx's `/api` proxy on the internal Compose
+  network; `docker-compose.override.yaml` publishes `BACKEND_HOST_PORT` locally
+  so you can call the API directly while developing.
+- Every service logs through the `json-file` driver with rotation configured
+  (`LOG_MAX_SIZE`, `LOG_MAX_FILE`), so container logs stay readable via the CLI
+  without filling the VM's disk.
 
 ### Changing the backend
 
@@ -281,9 +323,154 @@ docker compose logs -f database
 
 Persist a service's logs to a file for later review:
 ```bash
-docker logs conduit-container-backend-1 > meine-container-logs.txt
+docker compose logs --no-color --timestamps backend > backend-logs.txt
 ```
-(replace the container name with the actual name from `docker compose ps`).
+Or, for a single container by name (get the name from `docker compose ps`):
+```bash
+docker logs conduit-container-backend-1 > backend-logs.txt
+```
+
+All services use the `json-file` logging driver with rotation, so Docker itself
+also persists the logs on disk (under `/var/lib/docker/containers/<id>/`) and
+caps them: `LOG_MAX_SIZE` (default `10m`) per file, `LOG_MAX_FILE` (default `5`)
+files per container. Raise those in `.env` if you need a longer history:
+```bash
+LOG_MAX_SIZE=50m
+LOG_MAX_FILE=10
+```
+
+## Deployment
+
+Pushing to `main` builds, publishes and deploys the application automatically.
+The workflow lives in [`.github/workflows/deployment.yaml`](.github/workflows/deployment.yaml).
+
+### How the pipeline works
+
+```
+push to main ──▶ build-and-push (GitHub runner)      ──▶ deploy (over SSH)
+                 ├── build backend image                 ├── scp docker-compose.yaml → VM
+                 ├── build frontend image                ├── write .env from secrets
+                 └── push both to ghcr.io                ├── docker login ghcr.io
+                     (tags: <commit-sha>, latest)        ├── docker compose pull
+                                                         ├── docker compose up --detach --wait
+                                                         └── smoke test :8282 + :8282/api/tags
+```
+
+Two design points worth calling out:
+
+- **Nothing is built on the VM.** Both images are built on GitHub's runners and
+  pushed to the GitHub Container Registry (GHCR). The VM receives only
+  `docker-compose.yaml`, which contains no `build:` sections, and pulls the
+  finished images. This keeps the VM small, makes deploys fast, and means the
+  VM needs neither the source code nor a build toolchain.
+- **The workflow fails loudly.** Every remote step runs with `script_stops:
+  true` and `set -eu`, `docker compose up` uses `--wait` (which blocks until
+  every container reports healthy and exits non-zero if one does not), and a
+  final step curls the frontend and the proxied API. Any failure anywhere marks
+  the workflow run as failed.
+
+Each deploy pins `IMAGE_TAG` to the exact commit SHA that was just built, so a
+deployment is reproducible and you can always see which commit is running.
+
+### One-time setup
+
+**On the cloud VM:**
+
+1. Install Docker Engine with the Compose plugin (`docker compose version`
+   must report v2.17 or newer, for `docker compose up --wait`) and `curl`.
+2. Make sure the deploy user can run Docker without `sudo`:
+   ```bash
+   sudo usermod -aG docker "${USER}"
+   ```
+   (log out and back in afterwards)
+3. Create the deployment directory — `~/conduit` unless you set the
+   `DEPLOY_PATH` repository variable:
+   ```bash
+   mkdir -p ~/conduit
+   ```
+4. Open port `8282` in the VM's firewall / cloud security group.
+5. Add the public half of your deploy key to `~/.ssh/authorized_keys`.
+
+**In the GitHub repository** (Settings → Secrets and variables → Actions), add
+the secrets and variables listed below.
+
+**On GHCR:** the workflow pushes with the automatically provided
+`GITHUB_TOKEN`, so no personal access token is needed. The same token is passed
+to the VM for the duration of the run so it can `docker login ghcr.io` and pull
+private packages. If you'd rather not do that, make the two packages public
+under your GitHub profile → Packages → Package settings, and the pull works
+anonymously.
+
+### Required secrets and variables
+
+Secrets (Settings → Secrets and variables → Actions → **Secrets**):
+
+| Secret              | Description                                                   |
+| -------------------- | -------------------------------------------------------------- |
+| `SSH_HOST`           | Public IP or hostname of the cloud VM                          |
+| `SSH_USER`           | SSH login user on the VM                                       |
+| `SSH_PRIVATE_KEY`    | Private half of the deploy key, whole PEM block including headers |
+| `SSH_PORT`           | Optional. SSH port; defaults to `22` if unset                  |
+| `POSTGRES_USER`      | Postgres role name written into the VM's `.env`                |
+| `POSTGRES_PASSWORD`  | Postgres role password                                         |
+| `POSTGRES_DB`        | Database name                                                  |
+| `SECRET_KEY`         | Django `SECRET_KEY` / JWT signing secret                       |
+
+Variables (same page, **Variables** tab) — all optional:
+
+| Variable             | Default     | Description                              |
+| --------------------- | ----------- | ----------------------------------------- |
+| `DEPLOY_PATH`         | `~/conduit` | Directory on the VM holding the compose file and `.env` |
+| `FRONTEND_HOST_PORT`  | `8282`      | Host port the app is published on         |
+
+The VM's `.env` is rewritten from these secrets on **every** deploy, so
+credentials exist only in GitHub's secret store and on the VM's filesystem
+(created with `umask 077`) — never in git, never in an image layer, and never
+in the workflow logs.
+
+### Running and troubleshooting a deployment
+
+A push to `main` deploys automatically. To deploy the current `main` without
+pushing, use **Actions → Deployment → Run workflow** (the workflow declares
+`workflow_dispatch`).
+
+Once deployed, the app is reachable at `http://<vm-ip>:8282`.
+
+Useful checks on the VM:
+
+```bash
+cd ~/conduit
+docker compose ps                 # which images/tags are running, and health
+docker compose logs -f backend    # follow a service's logs
+docker compose config             # the fully resolved configuration
+```
+
+Common failures:
+
+- **`docker compose up --wait` times out** — a container never became healthy.
+  Run `docker compose ps` and `docker compose logs <service>` on the VM; the
+  backend is usually the culprit (a bad `SECRET_KEY` or database credentials).
+- **`denied` / `unauthorized` on `docker compose pull`** — the packages are
+  private and the registry login failed. Confirm the `packages: read`
+  permission on the `deploy` job, or make the packages public.
+- **The smoke test fails but the containers are healthy** — check that
+  `FRONTEND_HOST_PORT` matches the port you opened in the firewall.
+
+### Changing the deployment workflow
+
+- **Deploy from a different branch:** change the `on.push.branches` list at the
+  top of `.github/workflows/deployment.yaml`.
+- **Deploy to a different registry:** change the `IMAGE_REGISTRY` value in the
+  workflow's top-level `env:` block (it is used for both the login and the image
+  tags), and the `IMAGE_REGISTRY` default in `docker-compose.yaml`.
+- **Add a service to the stack:** add it to `docker-compose.yaml`. If it needs
+  building, add it to the `matrix.service` list in the `build-and-push` job and
+  to `docker-compose.override.yaml`.
+- **Deploy a specific version rather than the newest commit:** override
+  `IMAGE_TAG` in the VM's `.env` and run `docker compose up -d` there, or change
+  the `IMAGE_TAG` env value in the workflow's deploy step.
+- **Roll back:** re-run an older successful workflow run from the Actions tab —
+  it redeploys that run's commit SHA.
 
 ## Security notes
 
@@ -293,3 +480,12 @@ docker logs conduit-container-backend-1 > meine-container-logs.txt
   `.env.example`, with placeholder values, is committed.
 - `docker-compose.yaml` never hardcodes credentials — it loads them from your
   local `.env` via `env_file`, and only for the services that need them.
+- The deployment workflow contains no host names, IP addresses, users or keys.
+  Everything host-specific comes from GitHub Actions secrets and variables
+  (see [Required secrets and variables](#required-secrets-and-variables)), so
+  the repository stays publishable as-is.
+- The SSH deploy key lives only in the `SSH_PRIVATE_KEY` secret. It is never
+  written into the workspace, and secrets passed to the VM are masked in the
+  workflow logs.
+- The VM's `.env` is written with `umask 077`, so it is readable only by the
+  deploy user.
