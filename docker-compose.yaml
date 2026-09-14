@@ -1,12 +1,3 @@
-# Production / deployment stack.
-#
-# This file deliberately contains NO `build:` sections: on the cloud VM the
-# images are pulled from the container registry, they are never built there.
-# The images are built and pushed by .github/workflows/deployment.yaml.
-#
-# For local development, docker-compose.override.yaml (automatically merged by
-# `docker compose`) adds the build definitions back in.
-
 x-logging: &default_logging
   driver: json-file
   options:
@@ -37,9 +28,6 @@ services:
     environment:
       DB_HOST: database
       DB_PORT: 5432
-    # No `ports:` here on purpose: the backend is only ever reached through the
-    # frontend's Nginx proxy, so on the VM it stays on the internal Compose
-    # network. docker-compose.override.yaml publishes it for local debugging.
     healthcheck:
       test:
         [

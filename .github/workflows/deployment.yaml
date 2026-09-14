@@ -1,9 +1,5 @@
 name: Deployment
 
-# Builds the backend and frontend images on GitHub's runners, pushes them to the
-# GitHub Container Registry and then deploys them to the cloud VM over SSH.
-# The VM only pulls and starts prebuilt images - it never builds anything.
-
 on:
   push:
     branches:
@@ -36,7 +32,6 @@ jobs:
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          # Container registries only accept lowercase repository names.
           IMAGE_NAME="${IMAGE_REGISTRY}/${REPOSITORY_OWNER,,}/conduit-${SERVICE}"
           echo "IMAGE_NAME=${IMAGE_NAME}" >> "${GITHUB_OUTPUT}"
 
@@ -97,7 +92,6 @@ jobs:
         env:
           DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/conduit' }}
           IMAGE_REGISTRY: ${{ steps.registry.outputs.IMAGE_REGISTRY }}
-          # Deploy the exact commit that was just built, not a floating tag.
           IMAGE_TAG: ${{ github.sha }}
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -111,17 +105,12 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          # Abort the remote script - and therefore the workflow - on the first
-          # command that fails.
           script_stops: true
           envs: DEPLOY_PATH,IMAGE_REGISTRY,IMAGE_TAG,REGISTRY_USER,REGISTRY_TOKEN,FRONTEND_HOST_PORT,POSTGRES_USER,POSTGRES_PASSWORD,POSTGRES_DB,SECRET_KEY
           script: |
             set -eu
 
             cd "${DEPLOY_PATH}"
-
-            # Rewrite the .env file from the repository secrets on every deploy,
-            # so no credential is ever stored in git or baked into an image.
             umask 077
             cat > .env <<ENV_FILE
             IMAGE_REGISTRY=${IMAGE_REGISTRY}
@@ -137,8 +126,6 @@ jobs:
               | docker login "${IMAGE_REGISTRY%%/*}" --username "${REGISTRY_USER}" --password-stdin
 
             docker compose pull
-            # Detached mode; --wait blocks until every container is healthy and
-            # exits non-zero if one of them is not.
             docker compose up --detach --wait --wait-timeout 300 --remove-orphans
 
             docker logout "${IMAGE_REGISTRY%%/*}"
