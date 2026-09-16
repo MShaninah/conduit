@@ -8,6 +8,7 @@ on:
 
 env:
   IMAGE_REGISTRY: ghcr.io
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'conduit' }}
 
 jobs:
   build-and-push:
@@ -84,13 +85,12 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: docker-compose.yaml
-          target: ${{ vars.DEPLOY_PATH || '~/conduit' }}
+          target: ${{ env.DEPLOY_PATH }}
           overwrite: true
 
       - name: Start the stack with docker compose
         uses: appleboy/ssh-action@v1.2.0
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/conduit' }}
           IMAGE_REGISTRY: ${{ steps.registry.outputs.IMAGE_REGISTRY }}
           IMAGE_TAG: ${{ github.sha }}
           REGISTRY_USER: ${{ github.actor }}
@@ -134,7 +134,6 @@ jobs:
       - name: Verify that the application answers
         uses: appleboy/ssh-action@v1.2.0
         env:
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '~/conduit' }}
           FRONTEND_HOST_PORT: ${{ vars.FRONTEND_HOST_PORT || 8282 }}
         with:
           host: ${{ secrets.SSH_HOST }}
